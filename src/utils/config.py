@@ -21,6 +21,7 @@ class ModelConfig:
 class TrainingConfig:
     epochs: int = 100
     batch_size: int = 128  # Initial value, can be updated by auto-detection
+    max_batch_size: int = 4096
     lr: float = 0.001
     weight_decay: float = 0.001
     optimizer: str = "adamw"
@@ -79,6 +80,12 @@ class Config:
             help="Batch size (if auto_batch_size is False or as base)",
         )
         parser.add_argument(
+            "--max-batch-size",
+            type=int,
+            default=4096,
+            help="Maximum batch size for auto-detection",
+        )
+        parser.add_argument(
             "--no-auto-batch",
             action="store_true",
             help="Disable auto batch size detection",
@@ -120,6 +127,7 @@ class Config:
             training=TrainingConfig(
                 epochs=args.epochs,
                 batch_size=args.batch_size,
+                max_batch_size=args.max_batch_size,
                 lr=args.lr,
                 num_workers=args.num_workers,
                 eval_interval=args.eval_interval,

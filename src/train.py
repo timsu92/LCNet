@@ -100,7 +100,7 @@ def main():
             build_model=build_model_fn,
             sample_shape=(1, 3, 32, 32),  # CIFAR-10 shape
             base_batch=config.training.batch_size,  # Start from user provided or default 128
-            max_batch=4096,
+            max_batch=config.training.max_batch_size,
         )
         logger.info(f"Optimal batch size detected: {optimal_batch}")
         config.training.batch_size = optimal_batch
