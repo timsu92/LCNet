@@ -1,0 +1,30 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "train",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "src.train",
+			"cwd": "${workspaceFolder}",
+			"console": "integratedTerminal",
+			"args": [
+				"--epochs",
+				"1",
+				"--variant",
+				"${input:variant}",
+				"--batch-size",
+				"64"
+			],
+			"justMyCode": true
+		}
+	],
+	"inputs": [
+		{
+			"id": "variant",
+			"type": "promptString",
+			"description": "LCNet variant (tiny|small|base)",
+			"default": "tiny"
+		}
+	]
+}
