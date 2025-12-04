@@ -1,55 +1,47 @@
 from __future__ import annotations
-
 import argparse
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-
 import yaml
-
 
 @dataclass
 class ModelConfig:
-    variant: str = "tiny"  # tiny, small, base
+    variant: str = "base"  # 預設改為 base
     num_classes: int = 10
     input_channels: int = 3
-    # Additional model params can be added here or derived from variant in the model code
-
+    image_size: int = 224  # [新參數] 圖片尺寸
 
 @dataclass
 class TrainingConfig:
-    epochs: int = 100
-    batch_size: int = 128  # Initial value, can be updated by auto-detection
-    max_batch_size: int = 4096
+    epochs: int = 300      # 預設 300
+    batch_size: int = 128  
+    max_batch_size: int = 4096 # [原參數] 保留
     lr: float = 0.001
-    weight_decay: float = 0.001
+    weight_decay: float = 0.05 # [建議] 配合 Mixup 調大
     optimizer: str = "adamw"
     scheduler: str = "cosine"
-    num_workers: int = 4
-    eval_interval: int = 1
-    save_interval: int = 10
-    auto_batch_size: bool = True
-    resume: Optional[str] = None
-
+    mixup_alpha: float = 0.8   # [新參數] Mixup 強度
+    
+    num_workers: int = 4       # [原參數] 保留
+    eval_interval: int = 1     # [原參數] 保留
+    save_interval: int = 10    # [原參數] 保留
+    auto_batch_size: bool = True # [原參數] 保留
+    resume: Optional[str] = None # [原參數] 保留
 
 @dataclass
 class DataConfig:
     data_path: str = "./data"
     dataset: str = "cifar10"
 
-
 @dataclass
 class OutputConfig:
     base_dir: str = "./out"
     model_id: Optional[int] = None
-
-    # Computed paths
     model_dir: Path = field(init=False)
 
     def __post_init__(self):
-        # Initialize with a dummy path or None, will be resolved later
         self.model_dir = Path(self.base_dir)
-
 
 @dataclass
 class Config:
@@ -60,192 +52,109 @@ class Config:
 
     @classmethod
     def from_args(cls) -> Config:
-        parser = argparse.ArgumentParser(description="LCNet Training")
+        parser = argparse.ArgumentParser(description="LCNet Training with Mixup")
 
-        # Model args
-        parser.add_argument(
-            "--variant",
-            type=str,
-            default="tiny",
-            choices=["tiny", "small", "base"],
-            help="LCNet variant",
-        )
+        # --- Model Args ---
+        parser.add_argument("--variant", type=str, default="base", choices=["tiny", "small", "base"])
+        parser.add_argument("--image-size", type=int, default=224, help="Input resolution")
 
-        # Training args
-        parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
-        parser.add_argument(
-            "--batch-size",
-            type=int,
-            default=128,
-            help="Batch size (if auto_batch_size is False or as base)",
-        )
-        parser.add_argument(
-            "--max-batch-size",
-            type=int,
-            default=4096,
-            help="Maximum batch size for auto-detection",
-        )
-        parser.add_argument(
-            "--no-auto-batch",
-            action="store_true",
-            help="Disable auto batch size detection",
-        )
-        parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
-        parser.add_argument(
-            "--num-workers", type=int, default=4, help="Number of data loader workers"
-        )
-        parser.add_argument(
-            "--eval-interval", type=int, default=1, help="Epoch interval for evaluation"
-        )
-        parser.add_argument(
-            "--save-interval",
-            type=int,
-            default=10,
-            help="Epoch interval for saving checkpoints",
-        )
-        parser.add_argument(
-            "--resume",
-            type=str,
-            default=None,
-            help="Path to checkpoint to resume from",
-        )
-
-        # Data args
-        parser.add_argument(
-            "--data-path", type=str, default="./data", help="Path to dataset"
-        )
-
-        # Output args
-        parser.add_argument(
-            "--output-dir", type=str, default="./out", help="Base output directory"
-        )
-        parser.add_argument(
-            "--model-id",
-            type=int,
-            default=None,
-            help="Force a specific model ID (default: auto-increment)",
-        )
+        # --- Training Args ---
+        parser.add_argument("--epochs", type=int, default=300)
+        parser.add_argument("--batch-size", type=int, default=128)
+        
+        # [修復] 加回原本的參數
+        parser.add_argument("--max-batch-size", type=int, default=4096)
+        parser.add_argument("--no-auto-batch", action="store_true", help="Disable auto batch size detection")
+        
+        parser.add_argument("--lr", type=float, default=0.001)
+        parser.add_argument("--mixup-alpha", type=float, default=0.8, help="Mixup alpha value (0 to disable)")
+        
+        # [修復] 加回原本的參數
+        parser.add_argument("--num-workers", type=int, default=4)
+        parser.add_argument("--eval-interval", type=int, default=1)
+        parser.add_argument("--save-interval", type=int, default=10)
+        
+        parser.add_argument("--resume", type=str, default=None)
+        
+        # --- Data & Output Args ---
+        parser.add_argument("--data-path", type=str, default="./data")
+        parser.add_argument("--output-dir", type=str, default="./out")
+        parser.add_argument("--model-id", type=int, default=None)
 
         args = parser.parse_args()
 
-        # If resuming, load config from checkpoint directory
-        if args.resume:
-            checkpoint_path = Path(args.resume)
-            if not checkpoint_path.is_file():
-                raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        # Resuming logic
+        if args.resume and Path(args.resume).exists():
+             checkpoint_path = Path(args.resume)
+             config_path = checkpoint_path.parent / "config.yaml"
+             if config_path.exists():
+                 # Load saved config but override with CLI args if provided
+                 config = cls.load_yaml(config_path)
+                 config.training.resume = args.resume
+                 return config
 
-            # Load config from the checkpoint's directory
-            config_path = checkpoint_path.parent / "config.yaml"
-            if not config_path.is_file():
-                raise FileNotFoundError(f"Config file not found: {config_path}")
-
-            config = cls.load_yaml(config_path)
-
-            # Override with CLI args that make sense during resume
-            if args.epochs != parser.get_default("epochs"):
-                config.training.epochs = args.epochs
-            if args.num_workers != parser.get_default("num_workers"):
-                config.training.num_workers = args.num_workers
-
-            # Set resume path
-            config.training.resume = args.resume
-
-            return config
-
-        # Normal config creation from CLI args
         return cls(
-            model=ModelConfig(variant=args.variant),
+            model=ModelConfig(variant=args.variant, image_size=args.image_size),
             training=TrainingConfig(
                 epochs=args.epochs,
                 batch_size=args.batch_size,
-                max_batch_size=args.max_batch_size,
+                max_batch_size=args.max_batch_size, # 傳入
                 lr=args.lr,
-                num_workers=args.num_workers,
-                eval_interval=args.eval_interval,
-                save_interval=args.save_interval,
-                auto_batch_size=not args.no_auto_batch,
-                resume=args.resume,
+                mixup_alpha=args.mixup_alpha,
+                num_workers=args.num_workers,       # 傳入
+                eval_interval=args.eval_interval,   # 傳入
+                save_interval=args.save_interval,   # 傳入
+                auto_batch_size=not args.no_auto_batch, # 邏輯反轉
+                resume=args.resume
             ),
             data=DataConfig(data_path=args.data_path),
             output=OutputConfig(base_dir=args.output_dir, model_id=args.model_id),
         )
 
     def resolve_paths(self):
-        """Determines model_id and creates directories."""
         base_path = Path(self.output.base_dir)
         models_path = base_path / "models"
         models_path.mkdir(parents=True, exist_ok=True)
-
         if self.output.model_id is None:
-            # Auto-increment: find the max existing integer folder in models/
-            existing = [
-                int(p.name)
-                for p in models_path.iterdir()
-                if p.is_dir() and p.name.isdigit()
-            ]
+            existing = [int(p.name) for p in models_path.iterdir() if p.is_dir() and p.name.isdigit()]
             self.output.model_id = max(existing) + 1 if existing else 1
-
         self.output.model_dir = models_path / str(self.output.model_id)
         self.output.model_dir.mkdir(parents=True, exist_ok=True)
 
-        print(f"Model ID assigned: {self.output.model_id}")
-        print(f"Output directory: {self.output.model_dir}")
-
     def save_yaml(self, path: Optional[Path] = None):
-        """Saves the current configuration to a YAML file."""
         if path is None:
             path = self.output.model_dir / "config.yaml"
-
-        # Convert dataclasses to dict but SKIP computed fields (init=False)
-        # so that fields like `OutputConfig.model_dir` (computed in __post_init__) are
-        # not persisted and won't need special handling on load.
-
+        
+        # Helper to convert dataclass to dict
         def dataclass_to_dict(obj):
-            if isinstance(obj, Path):
-                return str(obj)
+            if isinstance(obj, Path): return str(obj)
             if is_dataclass(obj):
                 result = {}
                 for f in fields(obj):
-                    # Skip fields that are not part of __init__ (computed)
-                    if not f.init:
-                        continue
+                    if not f.init: continue
                     val = getattr(obj, f.name)
                     result[f.name] = dataclass_to_dict(val)
                 return result
-            if isinstance(obj, dict):
-                return {k: dataclass_to_dict(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [dataclass_to_dict(v) for v in obj]
+            if isinstance(obj, dict): return {k: dataclass_to_dict(v) for k, v in obj.items()}
+            if isinstance(obj, list): return [dataclass_to_dict(v) for v in obj]
             return obj
 
-        config_dict = dataclass_to_dict(self)
-
         with open(path, "w") as f:
-            yaml.dump(config_dict, f, sort_keys=False)
-        print(f"Config saved to {path}")
+            yaml.dump(dataclass_to_dict(self), f, sort_keys=False)
 
     @classmethod
     def load_yaml(cls, path: Path) -> Config:
-        """Loads configuration from a YAML file."""
         with open(path, "r") as f:
             config_dict = yaml.safe_load(f)
-
-        # Reconstruct nested dataclasses but only pass init=True fields so that
-        # computed fields (init=False) are not restored from YAML.
-        def filter_init_fields(dc_cls, raw: Dict[str, Any]) -> Dict[str, Any]:
+        
+        # Filtering helper
+        def filter_init_fields(dc_cls, raw):
             allowed = {f.name for f in fields(dc_cls) if f.init}
             return {k: v for k, v in raw.items() if k in allowed}
 
-        model_kwargs = filter_init_fields(ModelConfig, config_dict.get("model", {}))
-        training_kwargs = filter_init_fields(
-            TrainingConfig, config_dict.get("training", {})
-        )
-        data_kwargs = filter_init_fields(DataConfig, config_dict.get("data", {}))
-        output_kwargs = filter_init_fields(OutputConfig, config_dict.get("output", {}))
-
         return cls(
-            model=ModelConfig(**model_kwargs),
-            training=TrainingConfig(**training_kwargs),
-            data=DataConfig(**data_kwargs),
-            output=OutputConfig(**output_kwargs),
+            model=ModelConfig(**filter_init_fields(ModelConfig, config_dict.get("model", {}))),
+            training=TrainingConfig(**filter_init_fields(TrainingConfig, config_dict.get("training", {}))),
+            data=DataConfig(**filter_init_fields(DataConfig, config_dict.get("data", {}))),
+            output=OutputConfig(**filter_init_fields(OutputConfig, config_dict.get("output", {}))),
         )

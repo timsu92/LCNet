@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import numpy as np  # [新增] 用於 Beta 分布採樣
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -15,6 +15,28 @@ from .utils.system_info import auto_batch_size
 logger = get_logger(__name__)
 
 
+# --- [新增] Mixup Helper Functions ---
+def mixup_data(x, y, alpha=1.0, device='cuda'):
+    '''Returns mixed inputs, pairs of targets, and lambda'''
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size).to(device)
+
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
+    '''Loss calculation for mixup'''
+    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+# ------------------------------------
+
+
 def train_one_epoch(
     model: LCNet,
     loader: DataLoader,
@@ -22,6 +44,7 @@ def train_one_epoch(
     optimizer: optim.Optimizer,
     device: torch.device,
     epoch: int,
+    mixup_alpha: float = 0.0,  # [新增] 接收 mixup 參數
 ):
     model.train()
     running_loss = 0.0
@@ -33,15 +56,37 @@ def train_one_epoch(
         inputs, targets = inputs.to(device), targets.to(device)
 
         optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
+
+        # --- [修改] Mixup Logic ---
+        if mixup_alpha > 0:
+            inputs, targets_a, targets_b, lam = mixup_data(inputs, targets, mixup_alpha, device)
+            outputs = model(inputs)
+            loss = mixup_criterion(criterion, outputs, targets_a, targets_b, lam)
+        else:
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+        # -------------------------
+
         loss.backward()
+        
+        # Gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
         optimizer.step()
 
         running_loss += loss.item() * inputs.size(0)
+        
+        # --- [修改] 準確率計算 (針對 Mixup 做加權) ---
         _, predicted = outputs.max(1)
         total += targets.size(0)
-        correct += predicted.eq(targets).sum().item()
+        
+        if mixup_alpha > 0:
+            # Mixup 時的準確率通常是參考用，這裡計算加權後的正確率
+            correct += (lam * predicted.eq(targets_a).sum().float()
+                        + (1 - lam) * predicted.eq(targets_b).sum().float()).item()
+        else:
+            correct += predicted.eq(targets).sum().item()
+        # -------------------------------------------
 
         pbar.set_postfix({"loss": loss.item(), "acc": 100.0 * correct / total})
 
@@ -68,15 +113,27 @@ def validate(
         inputs, targets = inputs.to(device), targets.to(device)
 
         outputs = model(inputs)
+        
+        # Check for NaN in outputs
+        if torch.isnan(outputs).any():
+            logger.warning(f"NaN detected in model outputs during validation at epoch {epoch}")
+            # Skip this batch
+            continue
+            
         loss = criterion(outputs, targets)
+        
+        # Check for NaN in loss
+        if torch.isnan(loss):
+            logger.warning(f"NaN detected in loss during validation at epoch {epoch}")
+            continue
 
         running_loss += loss.item() * inputs.size(0)
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-    epoch_loss = running_loss / total
-    epoch_acc = 100.0 * correct / total
+    epoch_loss = running_loss / total if total > 0 else float('nan')
+    epoch_acc = 100.0 * correct / total if total > 0 else 0.0
     return epoch_loss, epoch_acc
 
 
@@ -96,6 +153,10 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
+    
+    # [新增] 讀取 Mixup 參數 (預設為 0.0 若 config 中沒有該欄位)
+    mixup_alpha = getattr(config.training, 'mixup_alpha', 0.0)
+    logger.info(f"Mixup Alpha: {mixup_alpha}")
 
     # 2. Auto Batch Size Detection
     if config.training.auto_batch_size and device.type == "cuda":
@@ -197,8 +258,9 @@ def main():
     # 7. Training Loop
     logger.info("Starting training...")
     for epoch in range(start_epoch, config.training.epochs + 1):
+        # [修改] 傳入 mixup_alpha
         train_loss, train_acc = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, epoch
+            model, train_loader, criterion, optimizer, device, epoch, mixup_alpha=mixup_alpha
         )
 
         if epoch % config.training.eval_interval == 0:
