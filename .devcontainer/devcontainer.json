@@ -20,7 +20,7 @@
   // ## Custom commands in different stages ##
   // "onCreateCommand": "",
   "postCreateCommand": ".devcontainer/postCreateCommand.sh",
-  // "postStartCommand": "",
+  "postStartCommand": ".devcontainer/postStartCommand.sh",
   // "postAttachCommand": "",
 
   // ## Tool-specific properties ##
