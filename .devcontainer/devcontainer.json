@@ -1,0 +1,37 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+{
+  "name": "pytorch_tempelate",
+  "dockerComposeFile": "docker-compose-dev.yml",
+  "service": "app",
+  // "runServices": [],
+  "overrideCommand": false,
+
+  // ## Environment ##
+  "workspaceFolder": "/project/pytorch_tempelate",
+  // Variables used in all of the container. Rebuild is required if you want to modify
+  "containerEnv": {
+    "GIT_EDITOR": "vim",
+  },
+  // Variables used for the devcontainer.json supporting service / tool
+  "remoteEnv": {
+    "GIT_AUTH_TOKEN": "${localEnv:GIT_AUTH_TOKEN}"
+  },
+
+  // ## Custom commands in different stages ##
+  // "onCreateCommand": "",
+  "postCreateCommand": ".devcontainer/postCreateCommand.sh",
+  // "postStartCommand": "",
+  // "postAttachCommand": "",
+
+  // ## Tool-specific properties ##
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "tamasfe.even-better-toml",
+        "charliermarsh.ruff",
+      ]
+    }
+  }
+}
+
