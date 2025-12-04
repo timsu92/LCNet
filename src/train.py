@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -81,6 +83,15 @@ def validate(
 def main():
     # 1. Load Config
     config = Config.from_args()
+
+    # If resuming, extract model_id from checkpoint path
+    if config.training.resume:
+        resume_path = Path(config.training.resume)
+        # Extract model_id from checkpoint path
+        model_id = int(resume_path.parent.name)
+        config.output.model_id = model_id
+        logger.info(f"Resuming training from model_id: {model_id}")
+
     config.resolve_paths()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -146,10 +157,46 @@ def main():
 
     best_acc = 0.0
     val_acc = 0.0
+    start_epoch = 1
+
+    # Resume from checkpoint
+    if config.training.resume:
+        resume_path = Path(config.training.resume)
+        logger.info(f"Resuming from checkpoint: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device)
+
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+        if scheduler and "scheduler_state_dict" in checkpoint:
+            sched_state = checkpoint["scheduler_state_dict"]
+            # Check if previous run finished its schedule
+            last_epoch = sched_state.get("last_epoch", -1)
+            t_max = sched_state.get("T_max", -1)
+
+            # If the previous schedule was completed, we start a new one
+            if t_max != -1 and last_epoch >= t_max - 1:
+                logger.info(
+                    "Previous scheduler finished. Starting new schedule and resetting LR."
+                )
+                # Reset optimizer LR to initial config value
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = config.training.lr
+                # Do NOT load scheduler state, so it starts fresh
+            else:
+                scheduler.load_state_dict(sched_state)
+
+        start_epoch = checkpoint["epoch"] + 1
+        if "acc" in checkpoint:
+            best_acc = checkpoint["acc"]
+
+        logger.info(
+            f"Resumed training from epoch {start_epoch}. Best acc so far: {best_acc:.2f}%"
+        )
 
     # 7. Training Loop
     logger.info("Starting training...")
-    for epoch in range(1, config.training.epochs + 1):
+    for epoch in range(start_epoch, config.training.epochs + 1):
         train_loss, train_acc = train_one_epoch(
             model, train_loader, criterion, optimizer, device, epoch
         )
@@ -186,13 +233,17 @@ def main():
 
         # Save Checkpoint
         if epoch % config.training.save_interval == 0:
+            checkpoint = {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "acc": val_acc if "val_acc" in locals() else 0.0,
+            }
+            if scheduler:
+                checkpoint["scheduler_state_dict"] = scheduler.state_dict()
+
             torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "acc": val_acc if "val_acc" in locals() else 0.0,
-                },
+                checkpoint,
                 config.output.model_dir / f"checkpoint_epoch_{epoch}.pt",
             )
 

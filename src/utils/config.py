@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -30,6 +29,7 @@ class TrainingConfig:
     eval_interval: int = 1
     save_interval: int = 10
     auto_batch_size: bool = True
+    resume: Optional[str] = None
 
 
 @dataclass
@@ -103,6 +103,12 @@ class Config:
             default=10,
             help="Epoch interval for saving checkpoints",
         )
+        parser.add_argument(
+            "--resume",
+            type=str,
+            default=None,
+            help="Path to checkpoint to resume from",
+        )
 
         # Data args
         parser.add_argument(
@@ -122,6 +128,31 @@ class Config:
 
         args = parser.parse_args()
 
+        # If resuming, load config from checkpoint directory
+        if args.resume:
+            checkpoint_path = Path(args.resume)
+            if not checkpoint_path.is_file():
+                raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+
+            # Load config from the checkpoint's directory
+            config_path = checkpoint_path.parent / "config.yaml"
+            if not config_path.is_file():
+                raise FileNotFoundError(f"Config file not found: {config_path}")
+
+            config = cls.load_yaml(config_path)
+
+            # Override with CLI args that make sense during resume
+            if args.epochs != parser.get_default("epochs"):
+                config.training.epochs = args.epochs
+            if args.num_workers != parser.get_default("num_workers"):
+                config.training.num_workers = args.num_workers
+
+            # Set resume path
+            config.training.resume = args.resume
+
+            return config
+
+        # Normal config creation from CLI args
         return cls(
             model=ModelConfig(variant=args.variant),
             training=TrainingConfig(
@@ -133,6 +164,7 @@ class Config:
                 eval_interval=args.eval_interval,
                 save_interval=args.save_interval,
                 auto_batch_size=not args.no_auto_batch,
+                resume=args.resume,
             ),
             data=DataConfig(data_path=args.data_path),
             output=OutputConfig(base_dir=args.output_dir, model_id=args.model_id),
@@ -164,19 +196,29 @@ class Config:
         if path is None:
             path = self.output.model_dir / "config.yaml"
 
-        # Helper to convert Paths to str for YAML serialization
-        def convert_to_dict(obj):
+        # Convert dataclasses to dict but SKIP computed fields (init=False)
+        # so that fields like `OutputConfig.model_dir` (computed in __post_init__) are
+        # not persisted and won't need special handling on load.
+
+        def dataclass_to_dict(obj):
             if isinstance(obj, Path):
                 return str(obj)
-            if hasattr(obj, "__dataclass_fields__"):
-                return convert_to_dict(asdict(obj))
+            if is_dataclass(obj):
+                result = {}
+                for f in fields(obj):
+                    # Skip fields that are not part of __init__ (computed)
+                    if not f.init:
+                        continue
+                    val = getattr(obj, f.name)
+                    result[f.name] = dataclass_to_dict(val)
+                return result
             if isinstance(obj, dict):
-                return {k: convert_to_dict(v) for k, v in obj.items()}
+                return {k: dataclass_to_dict(v) for k, v in obj.items()}
             if isinstance(obj, list):
-                return [convert_to_dict(v) for v in obj]
+                return [dataclass_to_dict(v) for v in obj]
             return obj
 
-        config_dict = convert_to_dict(self)
+        config_dict = dataclass_to_dict(self)
 
         with open(path, "w") as f:
             yaml.dump(config_dict, f, sort_keys=False)
@@ -188,20 +230,22 @@ class Config:
         with open(path, "r") as f:
             config_dict = yaml.safe_load(f)
 
-        # Reconstruct nested dataclasses
-        # Note: We need to handle Path objects conversion back if needed,
-        # but here we just pass strings to dataclasses which is fine for now
-        # as long as __post_init__ handles them or they are strings.
+        # Reconstruct nested dataclasses but only pass init=True fields so that
+        # computed fields (init=False) are not restored from YAML.
+        def filter_init_fields(dc_cls, raw: Dict[str, Any]) -> Dict[str, Any]:
+            allowed = {f.name for f in fields(dc_cls) if f.init}
+            return {k: v for k, v in raw.items() if k in allowed}
 
-        # OutputConfig needs special handling because model_dir is init=False
-        output_data = config_dict["output"]
-        # Remove computed fields if present in yaml (though save_yaml might have saved them)
-        if "model_dir" in output_data:
-            del output_data["model_dir"]
+        model_kwargs = filter_init_fields(ModelConfig, config_dict.get("model", {}))
+        training_kwargs = filter_init_fields(
+            TrainingConfig, config_dict.get("training", {})
+        )
+        data_kwargs = filter_init_fields(DataConfig, config_dict.get("data", {}))
+        output_kwargs = filter_init_fields(OutputConfig, config_dict.get("output", {}))
 
         return cls(
-            model=ModelConfig(**config_dict["model"]),
-            training=TrainingConfig(**config_dict["training"]),
-            data=DataConfig(**config_dict["data"]),
-            output=OutputConfig(**output_data),
+            model=ModelConfig(**model_kwargs),
+            training=TrainingConfig(**training_kwargs),
+            data=DataConfig(**data_kwargs),
+            output=OutputConfig(**output_kwargs),
         )
