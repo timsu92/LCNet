@@ -196,6 +196,8 @@ def main():
                 config.output.model_dir / f"checkpoint_epoch_{epoch}.pt",
             )
 
+    logger.info(f"Training completed. Saved at {config.output.model_dir}")
+
 
 if __name__ == "__main__":
     main()
