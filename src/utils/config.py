@@ -14,6 +14,7 @@ class ModelConfig:
     num_classes: int = 10
     input_channels: int = 3
     image_size: int = 224  # [新參數] 圖片尺寸
+    use_kan: bool = False  # [新參數] 是否使用 KAN 替換 MLP
 
 @dataclass
 class TrainingConfig:
@@ -67,6 +68,9 @@ class Config:
         parser.add_argument(
             "--image-size", type=int, default=224, help="Input resolution"
         )
+        parser.add_argument(
+            "--use-kan", action="store_true", help="Use KAN activation in output_trans"
+        )
 
         # --- Training Args ---
         parser.add_argument("--epochs", type=int, default=300)
@@ -109,7 +113,7 @@ class Config:
                  return config
 
         return cls(
-            model=ModelConfig(variant=args.variant, image_size=args.image_size),
+            model=ModelConfig(variant=args.variant, image_size=args.image_size, use_kan=args.use_kan),
             training=TrainingConfig(
                 epochs=args.epochs,
                 batch_size=args.batch_size,
@@ -171,8 +175,13 @@ class Config:
             allowed = {f.name for f in fields(dc_cls) if f.init}
             return {k: v for k, v in raw.items() if k in allowed}
 
+        # [向後兼容] 為舊配置文件添加缺失的參數
+        model_config = config_dict.get("model", {})
+        if "use_kan" not in model_config:
+            model_config["use_kan"] = False  # 舊配置預設不使用 KAN
+
         return cls(
-            model=ModelConfig(**filter_init_fields(ModelConfig, config_dict.get("model", {}))),
+            model=ModelConfig(**filter_init_fields(ModelConfig, model_config)),
             training=TrainingConfig(**filter_init_fields(TrainingConfig, config_dict.get("training", {}))),
             data=DataConfig(**filter_init_fields(DataConfig, config_dict.get("data", {}))),
             output=OutputConfig(**filter_init_fields(OutputConfig, config_dict.get("output", {}))),

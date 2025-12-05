@@ -164,6 +164,7 @@ def main():
     # [新增] 讀取 Mixup 參數 (預設為 0.0 若 config 中沒有該欄位)
     mixup_alpha = getattr(config.training, 'mixup_alpha', 0.0)
     logger.info(f"Mixup Alpha: {mixup_alpha}")
+    logger.info(f"Using KAN: {config.model.use_kan}")
 
     # 2. Auto Batch Size Detection
     if config.training.auto_batch_size and device.type == "cuda":
@@ -171,7 +172,9 @@ def main():
 
         def build_model_fn():
             return LCNet(
-                num_classes=config.model.num_classes, variant=config.model.variant
+                num_classes=config.model.num_classes, 
+                variant=config.model.variant,
+                use_kan=config.model.use_kan
             )
 
         optimal_batch = auto_batch_size(
@@ -192,7 +195,9 @@ def main():
 
     # 5. Model Setup
     model = LCNet(
-        num_classes=config.model.num_classes, variant=config.model.variant
+        num_classes=config.model.num_classes, 
+        variant=config.model.variant,
+        use_kan=config.model.use_kan
     ).to(device)
 
     criterion = nn.CrossEntropyLoss()

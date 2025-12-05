@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .kat import GroupRationalActivation
+
 
 class DynamicThresholdConv(nn.Module):
     """
@@ -171,7 +173,7 @@ class MultipathDynamicAttention(nn.Module):
 
 
 class LCNetBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int = 1, embed_dim: int = 64):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1, embed_dim: int = 64, use_kan: bool = False):
         super().__init__()
 
         # Eq 5: X1 = BN(Conv3x3(X)) [cite: 176]
@@ -197,21 +199,39 @@ class LCNetBlock(nn.Module):
         self.dtconv = DynamicThresholdConv(in_channels)
         self.mdam = MultipathDynamicAttention(in_channels, embed_dim=embed_dim)
 
-        # Output Trans: Conv1x1 -> DWConv [cite: 176]
-        self.output_trans = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(
-                out_channels,
-                out_channels,
-                3,
-                padding=1,
-                groups=out_channels,
-                bias=False,
-            ),
-            nn.BatchNorm2d(out_channels),
-        )
+        if use_kan:
+            # KAT Strategy: Replace MLP with KAN
+            # Structure: GroupRationalAct -> Linear (Conv1x1) -> DWConv
+            # 論文提到 GR-KAN 可以視為 "activation preceding the linear layer" [cite: 1105]
+            
+            self.output_trans = nn.Sequential(
+                # 1. Group Rational Activation (replacing ReLU and moving before Conv)
+                GroupRationalActivation(in_channels, groups=8), # groups=8 is default in paper 
+                
+                # 2. Linear Layer (Conv1x1) - Channel Mixing
+                nn.Conv2d(in_channels, out_channels, 1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                
+                # 3. DWConv - Spatial Mixing (LCNet original design kept for structure)
+                nn.Conv2d(out_channels, out_channels, 3, padding=1, groups=out_channels, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+        else:
+            # LCNet Output Trans: Conv1x1 -> DWConv [cite: 176]
+            self.output_trans = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, 1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(
+                    out_channels,
+                    out_channels,
+                    3,
+                    padding=1,
+                    groups=out_channels,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(out_channels),
+            )
 
         self.shortcut = nn.Identity()
         if stride != 1 or in_channels != out_channels:
@@ -238,7 +258,7 @@ class LCNetBlock(nn.Module):
 
 class LCNet(nn.Module):
     def __init__(
-        self, num_classes: int = 10, variant: Literal["tiny", "small", "base"] = "base"
+        self, num_classes: int = 10, variant: Literal["tiny", "small", "base"] = "base", use_kan: bool = False
     ):
         super().__init__()
 
@@ -285,7 +305,7 @@ class LCNet(nn.Module):
             layers = []
             for i in range(num_layers):
                 stride = stage_stride if i == 0 else 1
-                layers.append(LCNetBlock(in_ch, out_ch, stride=stride, embed_dim=embed_dim))
+                layers.append(LCNetBlock(in_ch, out_ch, stride=stride, embed_dim=embed_dim, use_kan=use_kan))
                 in_ch = out_ch
             self.stages.append(nn.Sequential(*layers))
 
