@@ -51,6 +51,157 @@ class OutputConfig:
 
 
 @dataclass
+class InferenceConfig:
+    """Configuration for inference runs"""
+
+    checkpoint_path: Path
+    input_path: Optional[Path] = None  # None = CIFAR-10, file/dir = auto-detect
+    output_base: Path = field(default_factory=lambda: Path("./out/eval/proc"))
+    batch_size: int = 256  # Will be auto-detected if not specified
+    max_batch_size: int = 2048  # Higher limit for inference
+    num_workers: int = 8
+    top_k: int = 5
+    auto_batch_size: bool = True
+
+    # Derived fields
+    model_dir: Path = field(init=False)
+    config_path: Path = field(init=False)
+    output_dir: Path = field(init=False)
+    mode: str = field(init=False)  # "cifar10", "image", or "directory"
+
+    def __post_init__(self):
+        # Validate checkpoint exists
+        if not self.checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {self.checkpoint_path}")
+
+        # Derive model directory and config path
+        self.model_dir = self.checkpoint_path.parent
+        self.config_path = self.model_dir / "config.yaml"
+
+        if not self.config_path.exists():
+            raise FileNotFoundError(f"Config not found: {self.config_path}")
+
+        # Determine mode
+        if self.input_path is None:
+            self.mode = "cifar10"
+        elif self.input_path.is_file():
+            self.mode = "image"
+        elif self.input_path.is_dir():
+            self.mode = "directory"
+        else:
+            raise ValueError(f"Input path does not exist: {self.input_path}")
+
+        # Create output directory with auto-incremented run_id
+        self.output_dir = self._get_next_run_dir()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_next_run_dir(self) -> Path:
+        """Auto-increment run_id for output directory"""
+        self.output_base.mkdir(parents=True, exist_ok=True)
+
+        # Extract model_id from model_dir
+        model_id = self.model_dir.name
+
+        # Find existing runs for this model
+        existing_runs = [
+            d
+            for d in self.output_base.iterdir()
+            if d.is_dir() and d.name.startswith(f"{model_id}-")
+        ]
+
+        if not existing_runs:
+            run_id = 1
+        else:
+            # Extract run numbers
+            run_nums = []
+            for d in existing_runs:
+                try:
+                    num = int(d.name.split("-")[1])
+                    run_nums.append(num)
+                except (IndexError, ValueError):
+                    continue
+            run_id = max(run_nums, default=0) + 1
+
+        return self.output_base / f"{model_id}-{run_id}"
+
+    @classmethod
+    def from_args(cls) -> InferenceConfig:
+        parser = argparse.ArgumentParser(
+            description="LCNet Inference Script",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog="""
+Examples:
+  # Infer on CIFAR-10 validation set
+  python -m src.inference --checkpoint ./out/models/10/best_model.pt
+
+  # Infer on a single image
+  python -m src.inference --checkpoint ./out/models/10/best_model.pt --input ./test.jpg
+
+  # Infer on all images in a directory
+  python -m src.inference --checkpoint ./out/models/10/best_model.pt --input ./test_images/
+            """,
+        )
+
+        parser.add_argument(
+            "--checkpoint",
+            type=str,
+            required=True,
+            help="Path to checkpoint file (e.g., ./out/models/10/best_model.pt or ./out/models/10/checkpoint_epoch_100.pt)",
+        )
+        parser.add_argument(
+            "--input",
+            type=str,
+            default=None,
+            help="Input path (image file or directory). If not specified, uses CIFAR-10 validation set.",
+        )
+        parser.add_argument(
+            "--output-base",
+            type=str,
+            default="./out/eval/proc",
+            help="Base directory for inference outputs",
+        )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=256,
+            help="Batch size for inference (will be auto-detected if --auto-batch-size is enabled)",
+        )
+        parser.add_argument(
+            "--max-batch-size",
+            type=int,
+            default=2048,
+            help="Maximum batch size for auto-detection",
+        )
+        parser.add_argument(
+            "--num-workers", type=int, default=8, help="Number of data loader workers"
+        )
+        parser.add_argument(
+            "--top-k",
+            type=int,
+            default=5,
+            help="Number of top predictions to calculate accuracy for",
+        )
+        parser.add_argument(
+            "--no-auto-batch",
+            action="store_true",
+            help="Disable auto batch size detection",
+        )
+
+        args = parser.parse_args()
+
+        return cls(
+            checkpoint_path=Path(args.checkpoint),
+            input_path=Path(args.input) if args.input else None,
+            output_base=Path(args.output_base),
+            batch_size=args.batch_size,
+            max_batch_size=args.max_batch_size,
+            num_workers=args.num_workers,
+            top_k=args.top_k,
+            auto_batch_size=not args.no_auto_batch,
+        )
+
+
+@dataclass
 class Config:
     model: ModelConfig
     training: TrainingConfig
