@@ -7,7 +7,7 @@ import yaml
 
 @dataclass
 class ModelConfig:
-    variant: str = "base"  # 預設改為 base
+    variant: Literal["tiny", "small", "base"] = "base"  # 預設改為 base
     num_classes: int = 10
     input_channels: int = 3
     image_size: int = 224  # [新參數] 圖片尺寸

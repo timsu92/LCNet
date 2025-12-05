@@ -86,7 +86,7 @@ class DynamicThresholdConv(nn.Module):
 
         # E. Apply Dynamic Kernels [cite: 274]
         # Sum(alpha_i * K_i(x))
-        out = 0
+        out = torch.zeros_like(x)  # Initialize as zero tensor with same shape as x
         for i in range(self.num_experts):
             w_i = weights[:, i].view(b, 1, 1, 1)
             # Only compute if weight is significant (optimization) or compute all for simplicity in training
@@ -218,7 +218,9 @@ class LCNetBlock(nn.Module):
 
 
 class LCNet(nn.Module):
-    def __init__(self, num_classes: int = 10, variant: str = "base"):
+    def __init__(
+        self, num_classes: int = 10, variant: Literal["tiny", "small", "base"] = "base"
+    ):
         super().__init__()
         
         # --- Fix 3: Variant Configs ---
