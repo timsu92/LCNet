@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 import argparse
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Literal, Optional
+
 import yaml
+
 
 @dataclass
 class ModelConfig:
@@ -14,25 +17,27 @@ class ModelConfig:
 
 @dataclass
 class TrainingConfig:
-    epochs: int = 300      # 預設 300
-    batch_size: int = 128  
+    epochs: int = 300  # 預設 300
+    batch_size: int = 128
     max_batch_size: int = 4096 # [原參數] 保留
     lr: float = 0.001
     weight_decay: float = 0.05 # [建議] 配合 Mixup 調大
     optimizer: str = "adamw"
     scheduler: str = "cosine"
-    mixup_alpha: float = 0.8   # [新參數] Mixup 強度
-    
-    num_workers: int = 4       # [原參數] 保留
-    eval_interval: int = 1     # [原參數] 保留
-    save_interval: int = 10    # [原參數] 保留
-    auto_batch_size: bool = True # [原參數] 保留
-    resume: Optional[str] = None # [原參數] 保留
+    mixup_alpha: float = 0.8  # [新參數] Mixup 強度
+
+    num_workers: int = 4  # [原參數] 保留
+    eval_interval: int = 1  # [原參數] 保留
+    save_interval: int = 10  # [原參數] 保留
+    auto_batch_size: bool = True  # [原參數] 保留
+    resume: Optional[str] = None  # [原參數] 保留
+
 
 @dataclass
 class DataConfig:
     data_path: str = "./data"
     dataset: str = "cifar10"
+
 
 @dataclass
 class OutputConfig:
@@ -42,6 +47,7 @@ class OutputConfig:
 
     def __post_init__(self):
         self.model_dir = Path(self.base_dir)
+
 
 @dataclass
 class Config:
@@ -55,27 +61,36 @@ class Config:
         parser = argparse.ArgumentParser(description="LCNet Training with Mixup")
 
         # --- Model Args ---
-        parser.add_argument("--variant", type=str, default="base", choices=["tiny", "small", "base"])
-        parser.add_argument("--image-size", type=int, default=224, help="Input resolution")
+        parser.add_argument(
+            "--variant", type=str, default="base", choices=["tiny", "small", "base"]
+        )
+        parser.add_argument(
+            "--image-size", type=int, default=224, help="Input resolution"
+        )
 
         # --- Training Args ---
         parser.add_argument("--epochs", type=int, default=300)
         parser.add_argument("--batch-size", type=int, default=128)
-        
+
         # [修復] 加回原本的參數
         parser.add_argument("--max-batch-size", type=int, default=4096)
         parser.add_argument("--no-auto-batch", action="store_true", help="Disable auto batch size detection")
-        
+
         parser.add_argument("--lr", type=float, default=0.001)
-        parser.add_argument("--mixup-alpha", type=float, default=0.8, help="Mixup alpha value (0 to disable)")
-        
+        parser.add_argument(
+            "--mixup-alpha",
+            type=float,
+            default=0.8,
+            help="Mixup alpha value (0 to disable)",
+        )
+
         # [修復] 加回原本的參數
         parser.add_argument("--num-workers", type=int, default=4)
         parser.add_argument("--eval-interval", type=int, default=1)
         parser.add_argument("--save-interval", type=int, default=10)
-        
+
         parser.add_argument("--resume", type=str, default=None)
-        
+
         # --- Data & Output Args ---
         parser.add_argument("--data-path", type=str, default="./data")
         parser.add_argument("--output-dir", type=str, default="./out")
@@ -124,19 +139,23 @@ class Config:
     def save_yaml(self, path: Optional[Path] = None):
         if path is None:
             path = self.output.model_dir / "config.yaml"
-        
+
         # Helper to convert dataclass to dict
         def dataclass_to_dict(obj):
-            if isinstance(obj, Path): return str(obj)
+            if isinstance(obj, Path):
+                return str(obj)
             if is_dataclass(obj):
                 result = {}
                 for f in fields(obj):
-                    if not f.init: continue
+                    if not f.init:
+                        continue
                     val = getattr(obj, f.name)
                     result[f.name] = dataclass_to_dict(val)
                 return result
-            if isinstance(obj, dict): return {k: dataclass_to_dict(v) for k, v in obj.items()}
-            if isinstance(obj, list): return [dataclass_to_dict(v) for v in obj]
+            if isinstance(obj, dict):
+                return {k: dataclass_to_dict(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [dataclass_to_dict(v) for v in obj]
             return obj
 
         with open(path, "w") as f:
@@ -146,7 +165,7 @@ class Config:
     def load_yaml(cls, path: Path) -> Config:
         with open(path, "r") as f:
             config_dict = yaml.safe_load(f)
-        
+
         # Filtering helper
         def filter_init_fields(dc_cls, raw):
             allowed = {f.name for f in fields(dc_cls) if f.init}

@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import numpy as np  # [新增] 用於 Beta 分布採樣
 import torch
 import torch.nn as nn
@@ -32,8 +33,10 @@ def mixup_data(x, y, alpha=1.0, device: torch.device | str = "cuda"):
 
 
 def mixup_criterion(criterion, pred, y_a, y_b, lam):
-    '''Loss calculation for mixup'''
+    """Loss calculation for mixup"""
     return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+
+
 # ------------------------------------
 
 
@@ -59,7 +62,9 @@ def train_one_epoch(
 
         # --- [修改] Mixup Logic ---
         if mixup_alpha > 0:
-            inputs, targets_a, targets_b, lam = mixup_data(inputs, targets, mixup_alpha, device)
+            inputs, targets_a, targets_b, lam = mixup_data(
+                inputs, targets, mixup_alpha, device
+            )
             outputs = model(inputs)
             loss = mixup_criterion(criterion, outputs, targets_a, targets_b, lam)
         else:
@@ -68,22 +73,24 @@ def train_one_epoch(
         # -------------------------
 
         loss.backward()
-        
+
         # Gradient clipping to prevent exploding gradients
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
+
         optimizer.step()
 
         running_loss += loss.item() * inputs.size(0)
-        
+
         # --- [修改] 準確率計算 (針對 Mixup 做加權) ---
         _, predicted = outputs.max(1)
         total += targets.size(0)
-        
+
         if mixup_alpha > 0:
             # Mixup 時的準確率通常是參考用，這裡計算加權後的正確率
-            correct += (lam * predicted.eq(targets_a).sum().float()
-                        + (1 - lam) * predicted.eq(targets_b).sum().float()).item()
+            correct += (
+                lam * predicted.eq(targets_a).sum().float()
+                + (1 - lam) * predicted.eq(targets_b).sum().float()
+            ).item()
         else:
             correct += predicted.eq(targets).sum().item()
         # -------------------------------------------
@@ -113,15 +120,15 @@ def validate(
         inputs, targets = inputs.to(device), targets.to(device)
 
         outputs = model(inputs)
-        
+
         # Check for NaN in outputs
         if torch.isnan(outputs).any():
             logger.warning(f"NaN detected in model outputs during validation at epoch {epoch}")
             # Skip this batch
             continue
-            
+
         loss = criterion(outputs, targets)
-        
+
         # Check for NaN in loss
         if torch.isnan(loss):
             logger.warning(f"NaN detected in loss during validation at epoch {epoch}")
@@ -153,7 +160,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
-    
+
     # [新增] 讀取 Mixup 參數 (預設為 0.0 若 config 中沒有該欄位)
     mixup_alpha = getattr(config.training, 'mixup_alpha', 0.0)
     logger.info(f"Mixup Alpha: {mixup_alpha}")
