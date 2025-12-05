@@ -234,7 +234,7 @@ class LCNet(nn.Module):
             ]
         elif variant == "small":
             stem_out = 32
-            embed_dim = 96 # Increased
+            embed_dim = 64  # Increased
             stage_configs = [
                 (32, 2, 1), (64, 4, 2), (128, 12, 2), (256, 2, 2)
             ]
